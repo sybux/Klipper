@@ -1,0 +1,2 @@
+# Klipper
+Configuration / tips / howto
