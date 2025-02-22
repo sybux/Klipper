@@ -1,4 +1,4 @@
-# Klipper
+# Update Klipper with Katapult
 Configuration / tips / howto
 
 ## Katapult setup on STM32F042
