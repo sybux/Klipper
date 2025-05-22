@@ -137,19 +137,44 @@ Ajoute dans `printer.cfg` :
 ```ini
 [gcode_macro LUXAFOR_DISPO]
 gcode:
-    {% shell "curl -s -X POST http://localhost:5000/set_color -d 'color=green&mode=static'" %}
+    M118 setting Luxafor to GREEN
+    RESPOND PREFIX="Luxafor" MSG="État : DISPONIBLE"
+    RUN_SHELL_COMMAND CMD=luxafor_color PARAMS='color=green&mode=static'
 
 [gcode_macro LUXAFOR_PRINTING]
 gcode:
-    {% shell "curl -s -X POST http://localhost:5000/set_color -d 'color=purple&mode=static'" %}
+    M118 setting Luxafor to PURPLE
+    RESPOND PREFIX="Luxafor" MSG="État : IMPRESSION"
+    RUN_SHELL_COMMAND CMD=luxafor_color PARAMS='color=purple&mode=static'
 
-[gcode_macro LUXAFOR_EXCLUDED]
+[gcode_macro LUXAFOR_EXCLUDED_OBJECT]
 gcode:
-    {% shell "curl -s -X POST http://localhost:5000/set_color -d 'color=orange&mode=static'" %}
+    M118 setting Luxafor to ORANGE
+    RESPOND PREFIX="Luxafor" MSG="État : OBJET EXCLU"
+    RUN_SHELL_COMMAND CMD=luxafor_color PARAMS='color=orange&mode=static'
 
 [gcode_macro LUXAFOR_ERROR]
 gcode:
-    {% shell "curl -s -X POST http://localhost:5000/set_color -d 'color=red&mode=blink'" %}
+    M118 setting Luxafor to RED
+    RESPOND PREFIX="Luxafor" MSG="État : ERREUR"
+    RUN_SHELL_COMMAND CMD=luxafor_color PARAMS='color=red&mode=static'
+
+[gcode_macro LUXAFOR_LOADING]
+gcode:
+    M118 setting Luxafor to Blue Blinking
+    RESPOND PREFIX="Luxafor" MSG="État : Loading Filament"
+    RUN_SHELL_COMMAND CMD=luxafor_color PARAMS='color=blue&mode=blink'
+
+[gcode_macro LUXAFOR_UNLOADING]
+gcode:
+    M118 setting Luxafor to Blue Blinking
+    RESPOND PREFIX="Luxafor" MSG="État : Unloading Filament"
+    RUN_SHELL_COMMAND CMD=luxafor_color PARAMS='color=yellow&mode=blink'
+
+[gcode_shell_command luxafor_color]
+command: curl -s -X POST http://localhost:5123/set_color -d 
+timeout: 5
+verbose: false
 ```
 
 ---
