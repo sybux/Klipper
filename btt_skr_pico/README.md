@@ -5,11 +5,11 @@ Configuration / tips / howto
 
 To install Katapult / canbus on this board follow this little step-by :
 1. go to katapult directory
-2. make menuconfig
-   <img width="632" height="220" alt="image" src="https://github.com/user-attachments/assets/b6985efe-b199-49a3-bb30-50eb816f5482" />
-
-3. `make`
-4. run command to flash firmware :
+2. `make menuconfig`
+    <img width="632" height="220" alt="image" src="https://github.com/user-attachments/assets/b6985efe-b199-49a3-bb30-50eb816f5482" />
+3. Press "Q" to quit and save
+4. `make`
+5. run command to flash firmware :
    `make flash FLASH_DEVICE=2e8a:0003`
 6. remove jumper and reboot the device with the reset button
 7. `ls /dev/serial/by-id/*` -> should list the board
@@ -21,8 +21,6 @@ To install Katapult / canbus on this board follow this little step-by :
 4. `chmod +x ~/klipper/mcu_update.sh`
 5. when the menuconfig display, set settings as bellow :
    <img width="656" height="196" alt="image" src="https://github.com/user-attachments/assets/bc618e48-d34b-4617-955d-ffbcec669699" />
-
-6. Go to the optional features and keep only the first 3 one and last one
 7. Press "Q" to quit and save
 8. klipper compile and if all is ok, hit enter to start flashing
 9. katapult is called to upload firmware, and voilà...
