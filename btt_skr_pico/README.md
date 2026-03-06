@@ -22,5 +22,5 @@ To install Katapult / canbus on this board follow this little step-by :
 5. when the menuconfig display, set settings as bellow :
    <img width="656" height="196" alt="image" src="https://github.com/user-attachments/assets/bc618e48-d34b-4617-955d-ffbcec669699" />
 7. Press "Q" to quit and save
-8. klipper compile and if all is ok, hit enter to start flashing
+8. `make flash FLASH_DEVICE=/dev/serial/by-id/usb-katapult_your_board_id`
 9. katapult is called to upload firmware, and voilà...
