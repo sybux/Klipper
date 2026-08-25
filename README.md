@@ -94,10 +94,13 @@ ip -details link show can0
 
 ```ini
 [mcu]
-canbus_uuid: xxxxxxxxxxxx
+serial: /dev/serial/by-id/usb-Klipper_rp2040_5044340410A1C31C-if00
+
+[mcu expander]
+serial: /dev/serial/by-id/usb-Klipper_stm32f042x6_1F0004000643305551363420-if00
 
 [mcu EBBCan]
-canbus_uuid: yyyyyyyyyyyy
+canbus_uuid: 5b05e772b541
 ```
 
 ---
