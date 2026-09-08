@@ -1,373 +1,415 @@
-# Voron 0.1 — Mise en service & calibration
+# Voron 0.1 — Guide de recalibration
 
-Marche à suivre complète pour (re)configurer et calibrer une Voron 0.1 équipée de :
+Procédures de réglage à appliquer **après un changement matériel** ou en entretien
+périodique. Part du principe que la machine tourne déjà : `printer.cfg` existe,
+le CAN est fonctionnel, les axes homent.
 
-- tête **CAN bus** (EBB36 / EBB42 / SB2040 + ADXL345 embarqué)
-- **plateau 120×120 full size** (chauffe pleine surface)
-- Klipper + Mainsail/Fluidd, Katapult pour le flash
-
-> ⚠️ Adapter les pins, UUID et valeurs aux cartes réellement montées.
-> Chaque étape se termine par un `SAVE_CONFIG` ou un commit git.
+Volume utile de référence : **X 0→120**, **Y 4→120**, plateau 120×120 full size,
+tête CAN avec ADXL345 embarqué.
 
 ---
 
-## Sommaire
+## Contenu du dépôt
 
-0. [Prérequis](#0-prérequis)
-1. [Firmware & CAN bus](#1-firmware--can-bus)
-2. [Config de base & sécurités](#2-config-de-base--sécurités)
-3. [Vérifications mécaniques à froid](#3-vérifications-mécaniques-à-froid)
-4. [Moteurs, sens & courants](#4-moteurs-sens--courants)
-5. [Endstops & homing](#5-endstops--homing)
-6. [Chauffes & PID](#6-chauffes--pid)
-7. [Extrudeur (rotation_distance)](#7-extrudeur-rotation_distance)
-8. [Z offset & première couche](#8-z-offset--première-couche)
-9. [Input Shaper (ADXL345 sur CAN)](#9-input-shaper-adxl345-sur-can)
-10. [Pressure Advance](#10-pressure-advance)
-11. [Flow / débit volumétrique max](#11-flow--débit-volumétrique-max)
-12. [Macros & finitions](#12-macros--finitions)
-13. [Tests de validation](#13-tests-de-validation)
-14. [Fiche de valeurs](#14-fiche-de-valeurs)
+```
+.
+├── README.md
+├── config/
+│   └── calibration.cfg          # macros d'aide — [include calibration.cfg]
+├── gcode/
+│   ├── first_layer_squares.gcode   # 5 zones : plan du plateau        (~4 min)
+│   ├── first_layer_patch.gcode     # patch plein 80×80 : Z offset     (~10 min)
+│   ├── pa_line_test.gcode          # 20 lignes PA 0→0.095             (~5 min)
+│   └── retraction_tower.gcode      # 2 tours : stringing              (~15 min)
+├── scripts/
+│   └── gen_calibration_gcode.py # régénère les .gcode (temps, buse, volume…)
+└── docs/
+    └── shaper/                  # archives des .csv d'input shaper
+```
 
----
+Les `.gcode` sont **autonomes** : chauffe, homing, purge et test inclus, aucun
+slicer nécessaire. Ils s'envoient directement dans Mainsail/Fluidd.
 
-## 0. Prérequis
-
-- [ ] Pi (ou host) à jour, KIAUH ou install manuelle : Klipper + Moonraker + Mainsail/Fluidd
-- [ ] Repo git initialisé sur `~/printer_data/config`
-- [ ] Alimentation vérifiée : 24 V stable, section suffisante pour le lit 120×120
-- [ ] Câblage CAN vérifié **avant** mise sous tension (CANH/CANL non inversés, pas de 24 V sur le bus)
-- [ ] Résistances de terminaison : **2 × 120 Ω** sur le bus (une à chaque extrémité, souvent un jumper sur la carte tête + un sur l'adaptateur)
+Ils sont générés pour **PLA 215/60 °C, couche 0.20, largeur 0.45, 25 mm/s**.
+Pour de l'ABS ou une autre buse :
 
 ```bash
-cd ~/printer_data/config
-git init && git add . && git commit -m "baseline"
+cd scripts
+python3 gen_calibration_gcode.py --nozzle 255 --bed 100 --fan 0
+python3 gen_calibration_gcode.py --width 0.6 --height 0.3   # buse 0.6
 ```
 
----
-
-## 1. Firmware & CAN bus
-
-### 1.1 Choix de la topologie
-
-| Option | Description |
-|---|---|
-| **A. USB→CAN bridge** | La carte mère (SKR Pico, Mini E3, Manta…) fait elle-même le pont USB↔CAN. Pas d'adaptateur externe. |
-| **B. Adaptateur dédié** | U2C / CANable / Pi CAN hat. La carte mère reste en USB classique. |
-
-> Bitrate : **1 000 000** si tout le câblage est propre et court (cas Voron 0), sinon **500 000** — la valeur doit être **identique** dans les 3 endroits : firmware MCU, firmware tête, `can0`.
-
-### 1.2 Flash
-
-```bash
-# Katapult (bootloader) puis Klipper
-cd ~/katapult && make menuconfig   # cible = RP2040 / STM32 selon carte
-make flash FLASH_DEVICE=...
-cd ~/klipper && make menuconfig    # Communication interface: CAN bus (ou USB-CAN bridge)
-make
-```
-
-- [ ] MCU principal flashé
-- [ ] Carte tête (EBB) flashée via Katapult
-- [ ] Notées les commandes exactes de flash dans `docs/flash.md` (on les oublie toujours)
-
-### 1.3 Interface `can0`
-
-`/etc/network/interfaces.d/can0` :
-
-```
-allow-hotplug can0
-iface can0 can static
-    bitrate 1000000
-    up ip link set can0 txqueuelen 128
-```
-
-Redémarrer, puis récupérer les UUID :
-
-```bash
-ip -details link show can0
-~/klippy-env/bin/python ~/klipper/scripts/canbus_query.py can0
-```
-
-- [ ] 2 UUID visibles (ou 1 si USB-CAN bridge : le MCU principal n'apparaît pas en CAN)
-- [ ] UUID reportés dans `printer.cfg`
+Installation des macros :
 
 ```ini
-[mcu]
-serial: /dev/serial/by-id/usb-Klipper_rp2040_5044340410A1C31C-if00
-
-[mcu expander]
-serial: /dev/serial/by-id/usb-Klipper_stm32f042x6_1F0004000643305551363420-if00
-
-[mcu EBBCan]
-canbus_uuid: 5b05e772b541
+# dans printer.cfg
+[include calibration.cfg]
 ```
 
 ---
 
-## 2. Config de base & sécurités
+## Matrice : qu'est-ce qui a changé ?
 
-Partir de la config officielle Voron 0.1 correspondant à la carte mère, puis :
+Trouve la ligne correspondant à ton intervention, applique les procédures
+indiquées **dans l'ordre des numéros**.
 
-- [ ] `[printer]` : `kinematics: corexy`, `max_velocity: 300`, `max_accel: 3000` (valeur de départ prudente), `max_z_velocity: 15`, `square_corner_velocity: 5`
-- [ ] `position_max` X/Y/Z cohérents avec le **plateau full size** — vérifier physiquement que la buse ne tape ni les courroies, ni les vis du plateau, ni le passage de câble
-- [ ] `[verify_heater]` actifs pour buse **et** lit (ne jamais désactiver)
-- [ ] `[idle_timeout]` configuré
-- [ ] `[temperature_sensor]` pour MCU, host et EBB (surveillance CAN)
-- [ ] `[exclude_object]`, `[respond]`, `[gcode_arcs]` si utilisés par OrcaSlicer
+| Intervention | P1 Drivers | P2 Méca | P3 PID | P4 Extrudeur | P5 1ère couche | P6 Shaper | P7 PA | P8 Flow | P9 Débit |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+| **Buse seule** (même Ø) | | | ● | | ● | | | | |
+| **Buse Ø différent** | | | ● | | ● | | ● | ● | ● |
+| **Hotend complet** | | | ● | ● | ● | | ● | ● | ● |
+| **Extrudeur / galets** | | | | ● | ● | | ● | ● | |
+| **Tête complète (CAN)** | ● | ● | ● | ● | ● | ● | ● | ● | ● |
+| **Courroies A/B** | | ● | | | | ● | | | |
+| **Rail / chariot X ou Y** | | ● | | | | ● | | | |
+| **Moteur ou driver** | ● | | | | | ● | | | |
+| **Plateau / surface** | | ● | ● | | ● | | | | |
+| **Thermistance** | | | ● | | | | | | |
+| **Nouveau filament** | | | | | | | ● | ● | ● |
+| **Nouvelle bobine, même réf.** | | | | | ● | | | ● | |
+| **Mise à jour Klipper** | ● | | | | | | | | |
+| **Entretien trimestriel** | ● | ● | | | ● | ● | | | |
 
-⚠️ **Spécifique plateau 120×120 full size** : le Z endstop d'origine (buse sur microswitch, coin arrière-droit) peut être masqué ou décalé par le plateau pleine surface. Vérifier :
-- [ ] dégagement mécanique du switch,
-- [ ] que le point de palpage est bien **hors** de la surface d'impression ou compensé par `position_endstop`,
-- [ ] sinon passer à un palpeur type sonde/nozzle-probe et adapter `[homing_override]`.
-
-Commit : `git commit -m "config de base + UUID CAN"`
+Légende : ● = à refaire.
 
 ---
 
-## 3. Vérifications mécaniques à froid
+## P1 — Contrôle des drivers
 
-À faire **avant** toute calibration logicielle — c'est là que se gagnent 80 % des résultats.
+**Quand :** après tout changement électrique, moteur, driver, ou mise à jour Klipper.
 
-- [ ] Cadre équerré, extrusions bien en appui
-- [ ] Rails X/Y/Z : vis serrées en croix, chariots sans point dur sur toute la course
-- [ ] Poulies folles libres, sans jeu axial ; vis de poulies dentées serrées **sur le méplat**
-- [ ] Tension des courroies A/B **identique** — cible ≈ **110 Hz** sur la portion libre (app Gates Carbon Drive / Spectroid). Toujours retendre les deux ensemble.
-- [ ] Courroie Z (si Voron 0 avec courroie) ou vis T8 : pas de jeu, accouplement serré
+```gcode
+TMC_STATUS
+```
+
+Points de contrôle sur chaque axe :
+
+| Champ | Attendu | Si non conforme |
+|---|---|---|
+| lecture des registres | pas d'erreur `Unable to read` | mauvais `uart_pin` / `uart_address` |
+| `GCONF` | `en_spreadcycle=1` sur X, Y, Z | voir encadré ci-dessous |
+| `cs_actual` | 16 à 28 | ajuster `run_current` / vérifier `sense_resistor` |
+| `GSTAT` | `00000000` | reset ou sous-tension → alim / câblage |
+| `mres` | conforme à `microsteps` | — |
+
+> ⚠️ **Piège `stealthchop_threshold`**
+> `stealthchop_threshold: 0` **active** stealthChop en permanence, il ne le
+> désactive pas. Pour du spreadCycle, la ligne doit être **absente ou commentée**.
+> Les configs Voron d'origine embarquent `: 0` sur X, Y et Z — à corriger.
+
+Vérification du courant réellement appliqué (TMC2209, `vsense=1`) :
+
+```
+Irms = (cs_actual + 1)/32 × 0.180 / (Rsense + 0.02) × 1/√2
+```
+
+**Contrôle du câblage moteur** — les drapeaux `ola`/`olb` ne sont exploitables
+qu'avec le driver actif et en mouvement (`enn=0`, `stst` absent) :
+
+```gcode
+TMC_STATUS_MOVING AXIS=x
+```
+
+À l'arrêt ils sont systématiquement levés : c'est normal, pas un défaut.
+
+**Bruit spreadCycle.** Sifflement continu à l'arrêt = comportement attendu.
+Pour le réduire sans perdre le mode : `hold_current: 0.4` sur X et Y
+(**pas sur Z** : risque de descente du plateau).
+
+---
+
+## P2 — Mécanique
+
+**Quand :** courroies, rails, chariots, plateau, entretien.
+
+C'est ici que se joue l'essentiel du résultat. Aucune calibration logicielle ne
+rattrape une mécanique approximative.
+
+- [ ] Rails X/Y/Z : vis serrées en croix, aucun point dur sur toute la course
+- [ ] Poulies folles libres, sans jeu axial ; poulies dentées serrées **sur le méplat**
+- [ ] Tension A/B **identique**, cible ≈ **110 Hz** (app Gates Carbon Drive ou Spectroid)
 - [ ] Deracking : desserrer les vis des chariots A/B, envoyer le portique en butée, resserrer
-- [ ] Plateau : plan réglé au réglet/feeler, vis à ressort ou fixe selon montage
-- [ ] Tête CAN : hotend bien enfoncé, ventilo de dissipation câblé et **testé**
-- [ ] Câble CAN de la tête : chaîne/toron libre sur toute la course, pas de traction
+- [ ] Vis Z / accouplement sans jeu
+- [ ] Chaîne ou toron CAN libre sur toute la course, aucune traction en butée
 
----
-
-## 4. Moteurs, sens & courants
-
-- [ ] Courant TMC : ~0.5–0.8 A RMS pour NEMA14/17 pancake de V0 — ne pas surchauffer
-- [ ] `stealthchop_threshold: 0` (spreadCycle) sur X/Y pour la précision
-- [ ] Sens de rotation : `FORCE_MOVE` avant tout homing
+Contrôle des dégagements après remontage :
 
 ```gcode
-FORCE_MOVE STEPPER=stepper_x DISTANCE=10 VELOCITY=20
-FORCE_MOVE STEPPER=stepper_y DISTANCE=10 VELOCITY=20
-FORCE_MOVE STEPPER=stepper_z DISTANCE=5 VELOCITY=5
+AXES_LIMITS
+G28
+G1 Z30 F600
+G1 X5 Y6 F1500
+G1 X115 Y115 F1500
 ```
 
-CoreXY : `stepper_x` seul → tête en diagonale **avant-droit** ; `stepper_y` seul → diagonale **arrière-droit** (inverser `dir_pin` avec `!` si besoin).
-
-- [ ] `rotation_distance: 40` (poulie 20T GT2) pour X/Y
-- [ ] Z : `rotation_distance` = pas de la vis (T8×8 → `8`) ou périmètre poulie si Z par courroie
-- [ ] `microsteps: 32` (bon compromis charge CPU / lissage)
-
-Diagnostic drivers :
-
-```gcode
-DUMP_TMC STEPPER=stepper_x
-```
-
----
-
-## 5. Endstops & homing
-
-```gcode
-QUERY_ENDSTOPS
-```
-
-- [ ] Chaque endstop passe `open` → `TRIGGERED` quand on l'actionne à la main
-- [ ] X puis Y puis Z homés séparément, main sur l'interrupteur d'urgence au premier essai
-- [ ] `homing_speed` réduit (25 mm/s) pour le premier test
-- [ ] `position_endstop` Z réglé grossièrement (voir §8)
-- [ ] `[safe_z_home]` / `[homing_override]` : position de palpage correcte pour le plateau full size
+Réglage du plan du plateau (pas de sonde sur V0.1) — la commande enchaîne les
+vis une par une et attend ta réponse à chaque étape :
 
 ```gcode
 G28
-G0 X60 Y60 Z10 F3000   # doit finir au centre, sans collision
+BED_SCREWS_ADJUST
 ```
 
-Test des limites, doucement :
+La buse descend à l'aplomb de la première vis. Test de la feuille, puis :
 
-```gcode
-G0 X0 Y0 F3000
-G0 X120 Y120 F3000
-```
+| Réponse | Effet |
+|---|---|
+| `ACCEPT` | vis correcte, passe à la suivante |
+| `ADJUSTED` | tu as tourné la vis → Klipper refera un tour complet à la fin |
+| `ABORT` | sort de la procédure |
 
-- [ ] Aucun contact en butée logicielle → ajuster `position_max` si nécessaire
+Répéter jusqu'à ce qu'un tour entier se termine sans un seul `ADJUSTED`.
+
+> Les positions des vis sont dans la section `[bed_screws]` de `calibration.cfg`
+> — à adapter à ton montage de plateau full size. Ce sont les coordonnées où la
+> **buse** doit se placer, pas celles des vis vues de dessous.
 
 ---
 
-## 6. Chauffes & PID
+## P3 — PID
 
-Avec le **plateau 120×120 full size**, la masse thermique est plus élevée : PID à la température réellement utilisée (ABL/ABS ≈ 100–110 °C), pas à 60 °C.
+**Quand :** hotend, buse, thermistance, plateau, ou dérive constatée.
 
 ```gcode
-PID_CALIBRATE HEATER=extruder TARGET=245
-PID_CALIBRATE HEATER=heater_bed TARGET=100
+PID_ALL HOTEND=245 BED=100
 SAVE_CONFIG
 ```
 
-- [ ] PID buse fait (avec le ventilo de couche **coupé**, puis vérifier à 100 % si dérive)
-- [ ] PID lit fait à la température de travail
-- [ ] `max_power` du lit ajusté si l'alim tire trop (`max_power: 0.8` par ex.)
-- [ ] Temps de montée à 100 °C noté (référence pour détecter une dégradation future)
-- [ ] Thermistances : bon `sensor_type` (Generic 3950 vs ATC Semitec 104NT/104GT) — une erreur ici fausse tout
-- [ ] Test de chauffe chambre : température atteinte en 15 min à noter (V0 monte vite, attention aux pièces ABS/PC)
+- PID buse **avec le ventilateur de couche coupé**, puis vérifier la stabilité à 100 %
+- PID plateau **à la température de travail réelle** (100–110 °C en ABS) : avec un
+  120×120 full size, l'inertie thermique est trop différente pour extrapoler depuis 60 °C
+- Noter le temps de montée à 100 °C dans la fiche §Valeurs — c'est ta référence
+  pour détecter plus tard une résistance qui faiblit ou un MOSFET qui chauffe
+
+Si l'alimentation tire trop : `max_power: 0.8` sur `[heater_bed]`.
 
 ---
 
-## 7. Extrudeur (rotation_distance)
+## P4 — Extrudeur (`rotation_distance`)
 
-Buse à température, filament chargé :
+**Quand :** extrudeur, galets, tension du levier, hotend.
 
 ```gcode
-G91
-G1 E100 F60   # extrusion lente de 100 mm
+E_TEST TEMP=215
 ```
 
-Mesurer la longueur réellement consommée (repère à 120 mm de l'entrée de l'extrudeur) :
+Repère le filament à 120 mm de l'entrée de l'extrudeur, laisse extruder 100 mm,
+mesure ce qui reste **au pied à coulisse**, puis :
 
-```
-nouvelle_rotation_distance = ancienne × (mesuré_consommé / 100)
+```gcode
+E_CALC LEFT=19
 ```
 
-- [ ] Écart final < 1 %
-- [ ] Refaire si changement de galets ou de tension du levier
-- [ ] `max_extrude_only_distance` adapté (150 pour les macros de purge)
+La macro lit la `rotation_distance` courante et affiche la nouvelle valeur.
+
+- Critère : écart final **< 1 %**
+- Un écart < 0.5 % est dans le bruit de mesure d'un réglet — ne corrige que si
+  la mesure est répétable deux fois
+- Reporter la valeur dans `[extruder]`, puis `FIRMWARE_RESTART`
+
+> Après cette correction, **remettre le flow ratio à 1.0 dans OrcaSlicer** avant
+> de passer en P8. Sinon la même erreur est compensée deux fois.
 
 ---
 
-## 8. Z offset & première couche
+## P5 — Z offset et première couche
 
-- [ ] Palpage/homing Z répétable : `PROBE_ACCURACY` (si sonde) ou 5 × `G28 Z` + `GET_POSITION` → dispersion < 0.01 mm
-- [ ] Réglage grossier avec une feuille de papier
-- [ ] Affinage en impression :
+**Quand :** buse, hotend, plateau, surface d'impression, nouvelle bobine.
+
+### 5.1 Répétabilité du homing Z
 
 ```gcode
-Z_OFFSET_APPLY_ENDSTOP   # ou _PROBE selon montage
+Z_REPEATABILITY
+```
+
+Dispersion attendue **< 0.01 mm**. Au-delà, c'est mécanique (switch mal fixé,
+jeu dans le chariot Z) — inutile d'aller plus loin.
+
+### 5.2 Plan du plateau
+
+Fichier : **`gcode/first_layer_squares.gcode`** (~4 min, 0.8 g)
+
+Cinq carrés de 25 mm : quatre coins + centre. Ils doivent avoir le **même aspect
+et la même épaisseur**. Un carré translucide ou décollé face aux autres = défaut
+de planéité → retour en P2, pas d'ajustement du Z offset.
+
+### 5.3 Z offset fin
+
+Fichier : **`gcode/first_layer_patch.gcode`** (~10 min, 1.6 g)
+
+Patch plein de 80×80 mm en une couche. Ajuster **en cours d'impression** :
+
+```gcode
+SET_GCODE_OFFSET Z_ADJUST=-0.01 MOVE=1
+```
+
+| Aspect du patch | Correction |
+|---|---|
+| Sillons visibles entre les lignes | descendre (Z_ADJUST négatif) |
+| Surface lisse, uniforme, mate | correct |
+| Aspect translucide, bourrelets, buse qui racle | remonter |
+
+Enregistrement une fois la valeur trouvée :
+
+```gcode
+Z_OFFSET_APPLY_ENDSTOP
 SAVE_CONFIG
 ```
 
-- [ ] Impression d'un patch 1 couche pleine surface → aspect homogène, coins identiques au centre
-- [ ] Si écart coins/centre : reprendre le plan du plateau (§3), **pas** le Z offset
-
 ---
 
-## 9. Input Shaper (ADXL345 sur CAN)
+## P6 — Input shaper
 
-Config type (accéléro sur la carte tête) :
+**Quand :** courroies, rails, tête, moteurs, masse embarquée modifiée.
 
-```ini
-[adxl345]
-cs_pin: EBBCan: gpio1
-spi_software_sclk_pin: EBBCan: gpio2
-spi_software_mosi_pin: EBBCan: gpio0
-spi_software_miso_pin: EBBCan: gpio3
-axes_map: x,y,z          # à vérifier selon orientation de la carte
-
-[resonance_tester]
-probe_points: 60, 60, 30
-accel_chip: adxl345
-```
+Prérequis : P2 validé, et **spreadCycle actif** (P1). Une mesure faite en
+stealthChop est à jeter.
 
 ```gcode
-ACCELEROMETER_QUERY      # doit renvoyer ~ (0,0,9800) au repos
-SHAPER_CALIBRATE
+ACCELEROMETER_QUERY
+```
+
+Doit renvoyer ≈ `(0, 0, 9800)` au repos. Sinon, corriger `axes_map` avant tout.
+
+```gcode
+SHAPER_BOTH BED=100
 SAVE_CONFIG
 ```
 
-- [ ] `axes_map` validé (secouer la tête à la main axe par axe)
-- [ ] Courbes exportées et archivées dans `docs/shaper/`
-- [ ] Fréquences X et Y notées ; si < 40 Hz sur un axe → **retourner au §3**, c'est mécanique
-- [ ] `max_accel` fixé à la valeur recommandée, pas au-delà
-- [ ] Refaire après toute modif de masse sur la tête
+> Sur une V0.1 destinée à l'ABS, mesurer **chambre chaude** : la dilatation des
+> courroies décale les fréquences de plusieurs Hz.
+
+Lecture des résultats :
+
+- Fréquence **< 40 Hz** sur un axe → problème mécanique, retour en P2
+- Pic large ou pics secondaires → jeu dans la transmission
+- Archiver les `.csv` dans `docs/shaper/` avec la date, pour comparer dans le temps
+
+Prendre le `max_accel` **recommandé par Klipper**, pas au-delà.
 
 ---
 
-## 10. Pressure Advance
+## P7 — Pressure Advance
 
-Méthode Klipper (tour de test) ou OrcaSlicer (PA pattern / line method).
+**Quand :** hotend, extrudeur, changement de filament.
 
-```gcode
-SET_PRESSURE_ADVANCE ADVANCE=0.04
-TUNING_TOWER COMMAND=SET_PRESSURE_ADVANCE PARAMETER=ADVANCE START=0 FACTOR=.005
+### Méthode rapide — lignes
+
+Fichier : **`gcode/pa_line_test.gcode`** (~5 min, 0.2 g)
+
+20 lignes à PA croissant de 0 à 0.095. Chaque ligne enchaîne 20 mm/s → 80 mm/s →
+20 mm/s. **La ligne 1 est la plus proche du bord avant.**
+
+Retenir la ligne dont la largeur reste la plus constante aux deux transitions de
+vitesse : renflement en sortie de zone rapide = PA trop faible, creux = PA trop fort.
+
+```
+PA = 0.005 × (numéro_de_ligne − 1)
 ```
 
-Valeurs de départ indicatives (direct drive court, type Mini SB / LGX Lite) :
+### Méthode fine — tour
 
-| Matière | PA de départ |
+```gcode
+PA_TOWER START=0 FACTOR=0.005
+PA_FROM_HEIGHT HEIGHT=12.4
+```
+
+### Valeurs de départ (direct drive court, type Mini SB / LGX Lite)
+
+| Matière | PA |
 |---|---|
 | PLA | 0.03 – 0.05 |
 | PETG | 0.05 – 0.08 |
-| ABS/ASA | 0.03 – 0.05 |
+| ABS / ASA | 0.03 – 0.05 |
 
-- [ ] Une valeur **par filament**, stockée côté Klipper (`[extruder] pressure_advance`) ou en macro `SET_PRESSURE_ADVANCE` par matière
-- [ ] PA laissé à **0** dans le slicer si géré par Klipper (ne pas cumuler)
-
----
-
-## 11. Flow / débit volumétrique max
-
-- [ ] Flow ratio : cube 30 mm mono-paroi (vase), mesurer l'épaisseur → `flow = largeur_théorique / mesurée`
-- [ ] Test de débit max : extrusion en l'air à débit croissant jusqu'au décrochage / sous-extrusion
-  - hotend V6 clone : ~8–11 mm³/s
-  - Dragon/Rapido UHF : au-delà, mais la V0 est souvent limitée par l'accélération, pas par le débit
-- [ ] `max_volumetric_speed` renseigné dans le profil filament OrcaSlicer
-- [ ] Vitesse d'impression réaliste = `débit_max / (hauteur_couche × largeur)`
+> PA géré **côté Klipper** (`[extruder] pressure_advance` ou macro par matière).
+> Laisser PA à **0 dans OrcaSlicer** pour ne pas cumuler les deux.
 
 ---
 
-## 12. Macros & finitions
+## P8 — Flow ratio
 
-- [ ] `PRINT_START` : chauffe lit → attente chambre → chauffe buse → G28 → purge line
-- [ ] `PRINT_END` : rétraction, dégagement, coupure chauffes, ventilo chambre
-- [ ] `CANCEL_PRINT`, `PAUSE`, `RESUME` (Voron standard)
-- [ ] `[firmware_retraction]` si le slicer l'utilise
-- [ ] Capteur de filament : `SFS_ENABLE` / `SFS_DISABLE` dans PRINT_START / PRINT_END / CANCEL_PRINT
-- [ ] LED / neopixel tête sur CAN
-- [ ] Ventilo chambre / filtre piloté par `[fan_generic]`
-- [ ] Sauvegarde Moonraker → git automatisée (`moonraker-timelapse` / `git-backup`)
+**Quand :** extrudeur, hotend, buse, nouveau filament ou nouvelle bobine.
 
----
+Prérequis : P4 fait et flow remis à 1.0 dans le slicer.
 
-## 13. Tests de validation
+Utiliser la calibration intégrée d'OrcaSlicer (*Calibration → Flow rate*), en deux
+passes : grossière puis fine. Alternative manuelle : cube 30 mm mono-paroi en mode
+vase, mesurer l'épaisseur au pied à coulisse sur les quatre faces.
 
-Dans l'ordre :
+```
+flow = largeur_théorique / largeur_mesurée
+```
 
-1. [ ] **Cube de calibration 30 mm** — dimensions ±0.1 mm
-2. [ ] **Voron Design Cube** — qualité générale, ghosting
-3. [ ] **Test de tolérance** / pion-trou
-4. [ ] **Benchy** à vitesse nominale puis à 1.5×
-5. [ ] **Impression longue (> 2 h)** — vérifier dérive thermique, tenue du CAN (`Timer too close` / `Lost communication with MCU` = problème de bus)
-6. [ ] Contrôle après 24 h d'impression : tension courroies, vis, température drivers
+Une bobine de la même référence peut demander un ajustement de ±0.02 — c'est
+normal, surtout sur les bioplastiques.
 
 ---
 
-## 14. Fiche de valeurs
+## P9 — Débit volumétrique maximal
 
-À remplir et versionner — c'est la référence en cas de régression.
+**Quand :** hotend, buse, nouveau filament.
 
-| Paramètre | Valeur | Date |
-|---|---|---|
-| Bitrate CAN | | |
-| UUID MCU | | |
-| UUID tête | | |
-| rotation_distance X/Y | 40 | |
-| rotation_distance Z | | |
-| rotation_distance extrudeur | | |
-| Tension courroies A/B (Hz) | | |
-| PID buse (Kp/Ki/Kd) | | |
-| PID lit (Kp/Ki/Kd) | | |
-| Z endstop / offset | | |
-| Shaper X (type / Hz) | | |
-| Shaper Y (type / Hz) | | |
-| max_accel retenu | | |
-| PA PLA / PETG / ABS | | |
-| Flow ratio par matière | | |
-| Débit max (mm³/s) | | |
+OrcaSlicer *Calibration → Max volumetric speed*, ou extrusion en l'air à débit
+croissant jusqu'au décrochage.
+
+Ordres de grandeur en buse 0.4 :
+
+| Hotend | mm³/s |
+|---|---|
+| V6 / clone | 8 – 11 |
+| Dragon SF | 10 – 13 |
+| Rapido UHF | 20+ |
+
+Sur une V0.1, la limite pratique est le plus souvent l'**accélération**, pas le
+débit. Reporter la valeur dans le profil filament OrcaSlicer.
+
+```
+vitesse_max = débit_max / (hauteur_couche × largeur_ligne)
+```
+
+---
+
+## Validation
+
+Après toute intervention notée ● en P5 ou plus :
+
+1. **Cube 30 mm** — dimensions ±0.1 mm
+2. **Voron Design Cube** — ghosting, qualité de coins
+3. **Benchy** à vitesse nominale, puis à 1.5×
+4. **Impression > 2 h** — dérive thermique, stabilité du bus CAN
+   (`Timer too close`, `Lost communication with MCU`)
+
+Test de stringing si besoin : **`gcode/retraction_tower.gcode`**, en modifiant
+`[firmware_retraction]` entre deux essais.
+
+---
+
+## Fiche de valeurs
+
+| Paramètre | Valeur | Date | Suite à |
+|---|---|---|---|
+| `run_current` X / Y / Z | | | |
+| `hold_current` X / Y | | | |
+| Tension courroies (Hz) | | | |
+| PID buse (Kp/Ki/Kd) | | | |
+| PID plateau (Kp/Ki/Kd) | | | |
+| Montée plateau → 100 °C | | | |
+| `rotation_distance` extrudeur | | | |
+| Z offset | | | |
+| Shaper X (type / Hz) | | | |
+| Shaper Y (type / Hz) | | | |
+| `max_accel` retenu | | | |
+| PA — PLA | | | |
+| PA — ABS | | | |
+| Flow — PLA | | | |
+| Flow — ABS | | | |
+| Débit max (mm³/s) | | | |
 
 ---
 
 ## Journal
 
-| Date | Modification | Résultat |
-|---|---|---|
-| | | |
+| Date | Intervention | Procédures refaites | Résultat |
+|---|---|---|---|
+| | | | |
