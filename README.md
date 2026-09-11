@@ -294,7 +294,7 @@ SAVE_CONFIG
 [lis2dw]
 cs_pin: EBB: PB1
 spi_bus: spi2_PB2_PB11_PB10
-axes_map: x,z,y
+axes_map: x,y,z
 
 [resonance_tester]
 accel_chip: lis2dw
@@ -307,14 +307,28 @@ probe_points: 60, 62, 30
 ACCELEROMETER_QUERY
 ```
 
-La **troisième** valeur doit être proche de **+9800**.
+La **troisième** valeur doit être proche de **+9800**, les deux autres résiduelles
+(typiquement < 500). Référence après pose du support imprimé :
+`(479, 325, 9686)` → inclinaison 3,4°, montage orthogonal.
 
-> **La carte est inclinée d'environ 30° dans son plan** sur la tête de la V0.1.
-> La gravité se répartit donc entre le 1er et le 3e axe (typiquement ~5150 et
-> ~8710) : c'est **normal et non corrigible** par `axes_map`, qui ne permute que
-> par multiples de 90°. Sans incidence : Klipper somme les densités spectrales
-> des trois axes, les pics restent détectés au bon endroit. Seule la lecture des
-> graphes par axe devient moins directe.
+> **Historique** : avant le support imprimé, la carte était inclinée de ~30° dans
+> son plan et la gravité se répartissait sur deux axes (`5149, 191, 8710`), ce qui
+> imposait `axes_map: x,z,y` et un couplage X/Y non corrigible. Le support ayant
+> remis la carte d'aplomb, le mapping est revenu à `x,y,z` et les courbes sont
+> de nouveau lisibles axe par axe.
+
+### Déterminer `axes_map` après un changement de support
+
+```gcode
+ACCELEROMETER_MEASURE
+```
+mouvement franc à la main selon X pendant ~3 s, puis
+```gcode
+ACCELEROMETER_MEASURE
+```
+
+Le CSV de `/tmp/` indique quel axe capteur porte le mouvement. La gravité au repos
+donne l'axe vertical, qui doit arriver en **3e position et positif**.
 
 ### Mesure
 
@@ -324,8 +338,23 @@ SAVE_CONFIG
 ```
 
 - Fréquence **< 40 Hz** sur un axe → problème mécanique, retour P2
-- Un pic identique sur les deux axes = couplage géométrique, pas un défaut
-- Archiver les `.csv` de `/tmp/` dans `docs/shaper/`
+- À refaire après **tout changement de masse ou de support sur la tête**
+
+### Archiver les résultats
+
+```bash
+mkdir -p ~/voron0-calibration/docs/shaper
+cp /tmp/calibration_data_*.csv ~/voron0-calibration/docs/shaper/
+```
+
+Pour regrouper par campagne (recommandé si plusieurs mesures dans la journée) :
+
+```bash
+DEST=~/voron0-calibration/docs/shaper/$(date +%Y%m%d)_<intervention>
+mkdir -p "$DEST" && cp /tmp/calibration_data_*.csv "$DEST/"
+```
+
+Les fichiers contiennent déjà l'axe et l'horodatage dans leur nom.
 
 ### max_accel
 
@@ -490,10 +519,12 @@ Tout étant en USB, il n'y a **pas de contrainte d'ordre** entre les cartes.
 | `rotation_distance` extrudeur | **4.637** | mesuré ; 4.683 si correction 1 % appliquée | |
 | `stealthchop_threshold` X / Y | **1** | `tpwmthrs = 9375` | |
 | `position_endstop` Z | **0.540** | PLA, plateau 60 °C, PEI propre | 2026-09-10 |
-| Shaper X | **mzv @ 71.4 Hz** | 0.0 % vibrations — cage ouverte, PLA | 2026-09-10 |
-| Shaper Y | **mzv @ 77.6 Hz** | 1.3 % vibrations — cage ouverte, PLA | 2026-09-10 |
-| `max_accel` retenu | **8000** | | 2026-09-10 |
-| `axes_map` LIS2DW | **x,z,y** | carte inclinée ~30° | 2026-09-10 |
+| ~~Shaper X~~ | ~~mzv @ 71.4 Hz~~ | **périmé** — mesuré avant le support EBB | 2026-09-10 |
+| ~~Shaper Y~~ | ~~mzv @ 77.6 Hz~~ | **périmé** — mesuré avant le support EBB | 2026-09-10 |
+| Shaper X | | à refaire après support EBB | |
+| Shaper Y | | à refaire après support EBB | |
+| `max_accel` retenu | **8000** | à revalider | 2026-09-10 |
+| `axes_map` LIS2DW | **x,y,z** | carte redressée par le support imprimé | 2026-09-11 |
 | `run_current` X / Y / Z | | | |
 | Tension courroies (Hz) | | | |
 | PID buse | | | |
@@ -517,6 +548,8 @@ Tout étant en USB, il n'y a **pas de contrainte d'ordre** entre les cartes.
 | 2026-09-10 | `axes_map` LIS2DW déterminé par analyse du CSV (`x,z,y`) | P6 | validé |
 | 2026-09-10 | Z offset | P5 | `position_endstop: 0.540` |
 | 2026-09-10 | Input shaper | P6 | X mzv 71.4 Hz / Y mzv 77.6 Hz |
+| 2026-09-11 | Pose des 3 dissipateurs sur l'EBB36 (STM32, TMC2209, AP65N06NF) | — | aucun gain mesuré : 56.4 → 56.6 °C |
+| 2026-09-11 | **Support EBB imprimé** : guide-câble (le câble sortait de son logement en impression) + ~1 cm d'écart avec le moteur + carte redressée | P6 | `axes_map` → `x,y,z`, shaper à refaire |
 
 ### Leçons
 
@@ -527,3 +560,11 @@ Tout étant en USB, il n'y a **pas de contrainte d'ordre** entre les cartes.
   défaut de Z offset ou de planéité.
 - **Régler le plateau à froid puis imprimer à chaud** ne fonctionne pas.
 - Le Klipper Expander **a bien un MCU** et se flashe comme les autres.
+- **Dissipateurs sur l'EBB36 : gain nul** (56.4 → 56.6 °C). La carte est chauffée
+  par **conduction depuis le moteur de l'extrudeur** via sa fixation, pas par ses
+  propres composants. Refroidir les puces ne sert à rien tant que le chemin
+  thermique n'est pas coupé — l'écart physique apporté par le support est le vrai
+  levier. Piste complémentaire : baisser le `run_current` extrudeur de 0.650 à 0.55 A.
+- `temperature_mcu` est un capteur de jonction à ±5–10 °C : il sert à suivre une
+  **tendance**, pas à mesurer une valeur absolue.
+- **Un changement de support de la tête invalide l'input shaper ET `axes_map`.**
